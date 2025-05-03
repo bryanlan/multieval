@@ -44,25 +44,29 @@ EVALUATION_MODELS = [
 def initialize_session_state():
     """Initializes required keys in Streamlit's session state if they don't exist."""
     defaults = {
+        # Prompt Configuration
         'core_prompt': '',
         'context': '',
-        'eval_template': """Evaluate the following response based on the core prompt and context.
-Core Prompt: {core_prompt}
+        'eval_template': """Evaluate the following responses to the below prompt and context.
+Provide your Evaluation Criteria: [Your criteria here - e.g., helpfulness, accuracy, tone]
+Rating (1-5):
+Justification:
+
+Prompt: {core_prompt}
 Context: {context}
 Response(s):
-{response_allmodels}
-
-Evaluation Criteria: [Your criteria here - e.g., helpfulness, accuracy, tone]
-Rating (1-5):
-Justification:""", # Added basic template structure
+{response_allmodels}""",
+        # LLM Selection
         'selected_inference_llms': [],
         'selected_eval_llms': [],
+        # API Parameters
         'temperature': 1.0,
-        'max_tokens': 4096, # Increased default based on spec
+        'max_tokens': 4096,
+        # Results Storage
         'inference_results': None,
         'evaluation_results': None,
         'generated_eval_prompt': None,
-        # Internal state keys for file uploaders if needed later
+        # Internal state keys for resetting file uploaders
         'prompt_set_loader_key': 0,
         'proj_state_loader_key': 0
     }
@@ -293,20 +297,25 @@ with config_tab:
     # --- Prompt Set Management ---
     st.subheader("Prompts")
     st.session_state.core_prompt = st.text_area(
-        "Core Prompt",
-        value=st.session_state.core_prompt, # Read from state
-        height=100
+        "Core Prompt", value=st.session_state.core_prompt, height=100
     )
     st.session_state.context = st.text_area(
-        "Context",
-        value=st.session_state.context, # Read from state
-        height=200
+        "Context", value=st.session_state.context, height=200
     )
+    
+    # Explanation of special tags
+    st.markdown("""
+    **Special Tags for Evaluation Template:**
+    - `{core_prompt}` - Inserts the core prompt text
+    - `{context}` - Inserts the context text (if provided)
+    - `{response_allmodels}` - Inserts all model responses with model names
+    - `{core_response_allmodels}` - Combines core prompt with all responses
+    - `{core_context_response_allmodels}` - Combines core prompt, context, and all responses
+    """)
+    
     st.session_state.eval_template = st.text_area(
-        "Evaluation Prompt Template",
-        value=st.session_state.eval_template, # Read from state
-        height=200,
-        help="Use placeholders: {core_prompt}, {context}, {response_allmodels}, {core_response_allmodels}, {core_context_response_allmodels}"
+        "Evaluation Prompt Template", value=st.session_state.eval_template, height=200,
+        help="Use placeholders to customize your evaluation prompt."
     )
 
     # --- Load Prompt Set ---
