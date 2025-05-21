@@ -4,6 +4,7 @@ import json
 import concurrent.futures
 import pyperclip
 import os # Added for file path handling if needed later
+import time
 
 # Attempt to import the API key
 try:
@@ -112,8 +113,8 @@ def call_openrouter(model_name: str, user_message: str, temperature: float, max_
     response_text = "" # Initialize for potential use in error reporting
 
     try:
-        # Make the API call with a timeout
-        response = requests.post(api_url, headers=headers, json=payload, timeout=180) # 3-minute timeout
+        # Make the API call with a reduced timeout (120s instead of 180s)
+        response = requests.post(api_url, headers=headers, json=payload, timeout=120)
         response_text = response.text # Store raw response text for debugging errors
 
         # Raise an exception for bad status codes (4xx or 5xx)
@@ -133,7 +134,7 @@ def call_openrouter(model_name: str, user_message: str, temperature: float, max_
 
     except requests.exceptions.Timeout:
         # Handle request timeout specifically
-        return (model_name, f"Error: API Request Timed Out ({model_name})")
+        return (model_name, f"Error: API Request Timed Out ({model_name}) - Request exceeded 120 seconds")
     except requests.exceptions.RequestException as e:
         # Handle other potential request errors (network issues, invalid URL, etc.)
         # Try to extract a more specific error message from the response body if available
@@ -152,7 +153,7 @@ def call_openrouter(model_name: str, user_message: str, temperature: float, max_
         # Catch any other unexpected errors during the process
         import traceback
         tb_str = traceback.format_exc()
-        return (model_name, f"Error: An unexpected error occurred ({model_name}) - {e}\\nTraceback:\\n{tb_str}")
+        return (model_name, f"Error: An unexpected error occurred ({model_name}) - {e}\nTraceback:\n{tb_str}")
 
 # --- Helper function for generating the evaluation prompt ---
 def generate_eval_prompt(core: str, context: str, template: str, results: list[tuple[str, str]]) -> str | None:
@@ -430,7 +431,7 @@ with output_tab:
     run_inference_button = st.button("Run Inference", key="run_inference")
 
     if run_inference_button:
-        # --- Input Validation ---
+        # Input Validation
         if not OPENROUTER_API_KEY:
             st.error("OpenRouter API key is missing. Please configure it in keys.py.")
         elif not st.session_state.selected_inference_llms:
@@ -438,72 +439,129 @@ with output_tab:
         elif not st.session_state.core_prompt:
              st.warning("Please provide a Core Prompt in the Configuration tab.")
         else:
-            st.session_state.inference_results = [] # Clear previous results
-            st.session_state.evaluation_results = None # Clear eval results
-            st.session_state.generated_eval_prompt = None # Clear generated prompt
-
+            # Clear previous results and prepare for execution
+            st.session_state.inference_results = []
+            st.session_state.evaluation_results = None
+            st.session_state.generated_eval_prompt = None
             selected_models = st.session_state.selected_inference_llms
             results = []
             futures = []
+            error_count = 0
 
-            # Combine core prompt and context ONCE
+            # Combine core prompt and context once
             user_message = f"Core Prompt:\n{st.session_state.core_prompt}"
             if st.session_state.context:
                  user_message += f"\n\nContext:\n{st.session_state.context}"
 
-            # --- Run Inference in Parallel ---
+            # Add progress tracking
+            progress = st.progress(0.0)
+            status_text = st.empty()
+            # Dictionary to track which models have completed
+            completed_models = {model: False for model in selected_models}
+
+            # Run Inference in Parallel
             with st.spinner(f"Running inference on {len(selected_models)} model(s)..."):
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    # Submit tasks
-                    for model_name in selected_models:
-                        futures.append(executor.submit(
-                            call_openrouter,
-                            model_name=model_name,
-                            user_message=user_message,
-                            temperature=st.session_state.temperature,
-                            max_tokens=st.session_state.max_tokens,
-                            api_key=OPENROUTER_API_KEY
-                        ))
+                try:
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        # Submit tasks
+                        for model_name in selected_models:
+                            status_text.text(f"Starting request for {model_name}...")
+                            futures.append(executor.submit(
+                                call_openrouter, model_name=model_name, user_message=user_message,
+                                temperature=st.session_state.temperature, max_tokens=st.session_state.max_tokens,
+                                api_key=OPENROUTER_API_KEY
+                            ))
+                        
+                        # Monitor progress and collect results with a timeout
+                        done_futures = set()
+                        total_models = len(selected_models)
+                        
+                        # Loop with timeout check
+                        start_time = time.time()
+                        max_wait_time = 300  # 5 minutes max for the whole process
+                        
+                        while len(done_futures) < len(futures):
+                            # Check timeout for the whole process
+                            if time.time() - start_time > max_wait_time:
+                                status_text.text(f"Overall process timed out after {max_wait_time} seconds!")
+                                # Mark incomplete models as timed out
+                                for i, (model, completed) in enumerate(completed_models.items()):
+                                    if not completed:
+                                        results.append((model, f"Error: Process timed out after {max_wait_time} seconds"))
+                                break
+                                
+                            # Check which futures completed with a small timeout
+                            newly_done, _ = concurrent.futures.wait(
+                                [f for f in futures if f not in done_futures],
+                                timeout=2.0,
+                                return_when=concurrent.futures.FIRST_COMPLETED
+                            )
+                            
+                            # Process completed futures
+                            for future in newly_done:
+                                done_futures.add(future)
+                                try:
+                                    model_name, response = future.result()
+                                    results.append((model_name, response))
+                                    completed_models[model_name] = True
+                                    status_text.text(f"Completed: {model_name}")
+                                except Exception as exc:
+                                    error_count += 1
+                                    st.error(f'An error occurred collecting result: {exc}')
+                                    # Find model name somehow or mark as unknown
+                                    for model in completed_models:
+                                        if not completed_models[model]:
+                                            results.append((model, f"Error: Failed to get result - {exc}"))
+                                            completed_models[model] = True
+                                            break
+                            
+                            # Update progress bar
+                            completion_ratio = len(done_futures) / len(futures)
+                            progress.progress(completion_ratio)
+                            
+                            # Small delay to prevent excessive CPU usage
+                            time.sleep(0.1)
+                        
+                        # Cancel any remaining futures if the process was interrupted
+                        for future in futures:
+                            if future not in done_futures:
+                                future.cancel()
+                        
+                except Exception as e:
+                    st.error(f"An unexpected error occurred during inference: {e}")
+                    import traceback
+                    st.code(traceback.format_exc(), language="python")
+                finally:
+                    # Always clean up progress indicators
+                    progress.empty()
+                    status_text.empty()
 
-                    # Collect results as they complete
-                    for future in concurrent.futures.as_completed(futures):
-                        try:
-                            result = future.result()
-                            results.append(result)
-                            # Optional: Update progress more granularly if needed
-                            # st.write(f"Received result for: {result[0]}")
-                        except Exception as exc:
-                            # This catches errors during the future's execution itself,
-                            # though call_openrouter should handle most API errors internally.
-                            st.error(f'An error occurred getting result: {exc}')
-                            # Find which model failed if possible (might be tricky here)
-                            # results.append(("Unknown Model", f"Error during future execution: {exc}"))
+            # Store Results and Generate Evaluation Prompt
+            # Make sure we have at least some results to store (even if errors)
+            if results:
+                results.sort(key=lambda x: x[0]) # Sort alphabetically by model name
+                st.session_state.inference_results = results
+                st.success(f"Inference complete for {len(results)} model(s). {error_count} errors occurred.")
 
-
-            # --- Store Results ---
-            # Sort results alphabetically by model name for consistent display
-            results.sort(key=lambda x: x[0])
-            st.session_state.inference_results = results
-            st.success(f"Inference complete for {len(results)} model(s).")
-
-            # --- Generate Evaluation Prompt ---
-            if results: # Only generate if we got some results (even errors count)
+                # Generate prompt
                 generated_prompt = generate_eval_prompt(
-                    core=st.session_state.core_prompt,
-                    context=st.session_state.context,
-                    template=st.session_state.eval_template,
-                    results=st.session_state.inference_results
+                    core=st.session_state.core_prompt, context=st.session_state.context,
+                    template=st.session_state.eval_template, results=st.session_state.inference_results
                 )
                 if generated_prompt:
                     st.session_state.generated_eval_prompt = generated_prompt
                     st.info("Evaluation prompt generated based on results.")
                 else:
-                    st.warning("Could not generate evaluation prompt (missing template or results?).")
+                    st.warning("Could not generate evaluation prompt (check template/results?).")
+            else:
+                st.error("No results were collected. Please try again or check API connectivity.")
 
-
-            # Rerun to update the display sections immediately
-            st.rerun()
-
+            # Add a "Clear Stuck Spinner" button just in case
+            if st.button("Clear Any Stuck Processes", key="clear_stuck"):
+                st.rerun()
+            else:
+                # Normal operation - update UI
+                st.rerun() # Update UI immediately
 
     # --- Display Inference Results (outside the button click logic) ---
     st.subheader("Inference Results")
