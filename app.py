@@ -14,31 +14,37 @@ except ImportError:
     OPENROUTER_API_KEY = None # Set to None if import fails
 
 # Predefined Model Lists (Update these with your desired models from OpenRouter)
+# Format: (model_name, input_price_per_1M_tokens, output_price_per_1M_tokens)
 INFERENCE_MODELS = [
-    "microsoft/mai-ds-r1:free",
-    "qwen/qwen3-235b-a22b:free",
-    "deepseek/deepseek-prover-v2",
-    "deepseek/deepseek-v3-base:free",
-    "google/gemini-2.5-pro-preview-03-25",
-    "google/gemini-2.5-flash-preview",
-    "x-ai/grok-3-mini-beta",
-    "openai/gpt-4o-mini",
-    "openai/o4-mini",
-    "openai/o4-mini-high",
-    "openai/o3",
-    "openai/gpt-4.1",
-    "openai/gpt-4.1-mini",
-    "openai/gpt-4.1-nano",
-    "openai/gpt-4o",
-    "anthropic/claude-3-opus",
-    "mistralai/mistral-large",
+    ("qwen/qwen3-235b-a22b:free", 0.00, 0.00),
+    ("deepseek/deepseek-prover-v2", 0.50, 2.18),
+    ("deepseek/deepseek-v3-base:free", 0.00, 0.00),
+    ("google/gemini-2.5-pro", 1.25, 10.00),
+    ("google/gemini-2.5-flash", 0.15, 0.60),
+    ("x-ai/grok-3-mini-beta", 0.30, 0.50),
+    ("openai/gpt-4o-mini", 0.15, 0.60),
+    ("openai/o4-mini", 1.10, 4.40),
+    ("openai/o4-mini-high", 1.10, 4.40),
+    ("openai/o3", 2.00, 8.00),
+    ("openai/gpt-4.1", 2.00, 8.00),
+    ("openai/gpt-4.1-mini", 0.40, 1.60),
+    ("openai/gpt-4.1-nano", 0.10, 0.40),
+    ("openai/gpt-4o", 2.50, 10.00),
+    ("anthropic/claude-3-opus", 15.00, 75.00),
+    ("mistralai/mistral-large", 2.00, 6.00),
+    ("moonshotai/kimi-k2", 0.57, 2.30),
+    ("google/gemini-2.5-flash-lite-preview-06-17", 0.10, 0.40),
+    ("deepseek/deepseek-r1-0528-qwen3-8b:free", 0.00, 0.00),
+    ("google/gemma-3-27b-it:free", 0.00, 0.00),
+    ("baidu/ernie-4.5-300b-a47b", 0.28, 1.10),
 ]
 
 EVALUATION_MODELS = [
-    "openai/o3",
-    "openai/o4-mini",
-    "google/gemini-2.5-pro-preview-03-25",
-    "microsoft/mai-ds-r1:free",
+    ("openai/o3", 2.00, 8.00),
+    ("openai/o4-mini", 1.10, 4.40),
+    ("google/gemini-2.5-pro", 1.25, 10.00),
+    ("google/gemini-2.5-flash", 0.15, 0.60),
+    ("moonshotai/kimi-k2", 0.57, 2.30),
 ]
 
 # --- Initialize Session State ---
@@ -62,7 +68,7 @@ Response(s):
         'selected_eval_llms': [],
         # API Parameters
         'temperature': 1.0,
-        'max_tokens': 4096,
+        'max_tokens': 100000,
         # Results Storage
         'inference_results': None,
         'evaluation_results': None,
@@ -216,6 +222,22 @@ def prepare_prompt_set_json() -> str:
     }
     return json.dumps(prompt_set_data, indent=2)
 
+# --- Helper function to get model pricing information ---
+def get_model_pricing(model_name: str) -> tuple[float, float]:
+    """Get input and output pricing for a model."""
+    # Search in inference models first
+    for model in INFERENCE_MODELS:
+        if model[0] == model_name:
+            return model[1], model[2]
+    
+    # Search in evaluation models
+    for model in EVALUATION_MODELS:
+        if model[0] == model_name:
+            return model[1], model[2]
+    
+    # Return default values if not found
+    return 0.0, 0.0
+
 # --- Helper function to prepare Project State JSON ---
 def prepare_project_state_json() -> str:
     """Gathers the entire relevant session state and returns an indented JSON string."""
@@ -367,23 +389,38 @@ with config_tab:
     # Callback to handle inference LLM selections
     def on_inference_change():
         # Get selections from the widget's session state value
-        st.session_state.selected_inference_llms = st.session_state.ms_inference
+        selected_options = st.session_state.ms_inference
+        inference_model_names = [model[0] for model in INFERENCE_MODELS]
+        inference_options = [f"{model[0]} (${model[1]:.2f}/1M input, ${model[2]:.2f}/1M output)" for model in INFERENCE_MODELS]
+        selected_models = [inference_model_names[inference_options.index(option)] for option in selected_options]
+        st.session_state.selected_inference_llms = selected_models
     
     # Callback to handle eval LLM selections
     def on_eval_change():
         # Get selections from the widget's session state value
-        st.session_state.selected_eval_llms = st.session_state.ms_eval
+        selected_options = st.session_state.ms_eval
+        evaluation_model_names = [model[0] for model in EVALUATION_MODELS]
+        evaluation_options = [f"{model[0]} (${model[1]:.2f}/1M input, ${model[2]:.2f}/1M output)" for model in EVALUATION_MODELS]
+        selected_models = [evaluation_model_names[evaluation_options.index(option)] for option in selected_options]
+        st.session_state.selected_eval_llms = selected_models
 
+    # Create display options for inference models with pricing info
+    inference_options = [f"{model[0]} (${model[1]:.2f}/1M input, ${model[2]:.2f}/1M output)" for model in INFERENCE_MODELS]
+    inference_model_names = [model[0] for model in INFERENCE_MODELS]
+    
     # Multiselect for inference LLMs
-    st.multiselect(
+    selected_inference_indices = st.multiselect(
         "Select Inference LLMs",
-        options=INFERENCE_MODELS,
-        default=st.session_state.get('selected_inference_llms', []),
+        options=inference_options,
+        default=[],
         key="ms_inference",
         on_change=on_inference_change,
-        # If we don't reuse default, setting it to empty list when none selected
         help="Select one or more LLMs to use for inference."
     )
+    
+    # Convert selected indices to model names
+    selected_inference_models = [inference_model_names[inference_options.index(option)] for option in selected_inference_indices]
+    st.session_state.selected_inference_llms = selected_inference_models
     
     # Show current selections
     if st.session_state.get('selected_inference_llms'):
@@ -392,15 +429,23 @@ with config_tab:
     
     st.divider()
     
+    # Create display options for evaluation models with pricing info
+    evaluation_options = [f"{model[0]} (${model[1]:.2f}/1M input, ${model[2]:.2f}/1M output)" for model in EVALUATION_MODELS]
+    evaluation_model_names = [model[0] for model in EVALUATION_MODELS]
+    
     # Multiselect for evaluation LLMs
-    st.multiselect(
+    selected_eval_indices = st.multiselect(
         "Select Evaluation LLMs",
-        options=EVALUATION_MODELS,
-        default=st.session_state.get('selected_eval_llms', []),
+        options=evaluation_options,
+        default=[],
         key="ms_eval",
         on_change=on_eval_change,
         help="Select one or more LLMs to use for evaluation."
     )
+    
+    # Convert selected indices to model names
+    selected_eval_models = [evaluation_model_names[evaluation_options.index(option)] for option in selected_eval_indices]
+    st.session_state.selected_eval_llms = selected_eval_models
     
     # Show current selections
     if st.session_state.get('selected_eval_llms'):
@@ -568,7 +613,11 @@ with output_tab:
     if 'inference_results' in st.session_state and st.session_state.inference_results:
         # Display results using expanders
         for model, response in st.session_state.inference_results:
-            with st.expander(f"Response from: {model}", expanded=True):
+            # Get pricing information for the model
+            input_price, output_price = get_model_pricing(model)
+            pricing_info = f" (${input_price:.2f}/1M input, ${output_price:.2f}/1M output)"
+            
+            with st.expander(f"Response from: {model}{pricing_info}", expanded=True):
                 st.markdown(response) # Display response using markdown
                 # Add copy button for individual response
                 if st.button(f"Copy Response##{model}", key=f"copy_{model}"): # Use unique key per button
@@ -679,7 +728,11 @@ with eval_tab:
     if 'evaluation_results' in st.session_state and st.session_state.evaluation_results:
         # Display results using expanders
         for model, response in st.session_state.evaluation_results:
-            with st.expander(f"Evaluation from: {model}", expanded=True):
+            # Get pricing information for the model
+            input_price, output_price = get_model_pricing(model)
+            pricing_info = f" (${input_price:.2f}/1M input, ${output_price:.2f}/1M output)"
+            
+            with st.expander(f"Evaluation from: {model}{pricing_info}", expanded=True):
                 st.markdown(response) # Display eval response using markdown
                 # Optionally add copy button for eval responses too
                 if st.button(f"Copy Eval##{model}", key=f"copy_eval_{model}"):
