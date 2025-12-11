@@ -139,3 +139,14 @@ The application uses predefined lists of inference and evaluation models (`INFER
 ## Contributing
 
 Feel free to fork the project, make improvements, and submit pull requests. 
+
+<img width="2398" height="1157" alt="image" src="https://github.com/user-attachments/assets/3c7ce363-f130-465b-97fc-c165103fe450" />
+<img width="2317" height="799" alt="image" src="https://github.com/user-attachments/assets/1b610bc4-572b-4cec-ad58-1a2869073e0b" />
+<img width="1295" height="1254" alt="image" src="https://github.com/user-attachments/assets/6eeb025f-0488-4ce4-af97-8375062dfe70" />
+<img width="1943" height="1219" alt="image" src="https://github.com/user-attachments/assets/46b6c5cb-c338-4a12-b90f-2380c1790f85" />
+
+
+
+
+
+
